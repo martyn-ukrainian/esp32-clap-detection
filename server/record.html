@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="uk">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Запис хлопків</title>
+<style>
+  :root { --bg:#f6f5f2; --card:#fff; --ink:#1d1d1b; --mute:#76736c; --line:#e3e0d9; --go:#2f7d4f; --wait:#b8860b; --bad:#a3542b; --pos:#2f7d4f; --neg:#5a5f8a; }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.4 -apple-system, system-ui, sans-serif; padding:16px; padding-bottom:calc(16px + env(safe-area-inset-bottom)); }
+  h1 { font-size:20px; margin:0 0 4px } .mute { color:var(--mute); font-size:14px }
+  section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-top:12px }
+  h2 { font-size:14px; margin:0 0 8px; color:var(--mute); font-weight:600 }
+  .grid { display:flex; flex-wrap:wrap; gap:8px }
+  button { font:inherit; border:1px solid var(--line); background:var(--card); border-radius:10px; padding:10px 12px; cursor:pointer; color:var(--ink) }
+  button.cat.on { color:#fff; border-color:transparent }
+  button.cat.pos.on { background:var(--pos) } button.cat.neg.on { background:var(--neg) }
+  button.big { font-size:18px; padding:14px 18px; background:var(--ink); color:#fff; border-color:var(--ink) }
+  button:disabled { opacity:.4 }
+  .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center }
+  input { font:inherit; padding:8px; border:1px solid var(--line); border-radius:8px; width:5em; background:var(--card); color:var(--ink) }
+  input.wide { width:12em }
+  #stage { text-align:center; padding:24px 8px; border-radius:16px; margin-top:12px; background:var(--card); border:1px solid var(--line) }
+  #count { font-size:min(38vw, 180px); font-weight:800; line-height:1; font-variant-numeric:tabular-nums }
+  #what { font-size:22px; margin-top:6px } #info { margin-top:6px }
+  #stage.go { background:var(--go); color:#fff; border-color:var(--go) } #stage.go .mute { color:#e6f2ea }
+  #stage.wait #count { color:var(--wait) }
+  table { width:100%; border-collapse:collapse; font-size:14px } td, th { padding:6px 4px; border-bottom:1px solid var(--line); text-align:left }
+  .ok { color:var(--go); font-weight:600 } .miss { color:var(--bad); font-weight:600 }
+  .tally span { display:inline-block; margin:2px 8px 2px 0 }
+</style>
+
+<h1>Запис хлопків</h1>
+<div class="mute">Поки йде запис, світло хлопками не перемикається. Звуків сторінка не видає, щоб не потрапити в мікрофон.</div>
+
+<section>
+  <h2>1. Що записуємо</h2>
+  <div class="grid" id="cats"></div>
+  <div class="row" style="margin-top:10px">
+    <input class="wide" id="custom" placeholder="свій звук, напр. двері">
+    <button id="addCustom">додати</button>
+  </div>
+</section>
+
+<section>
+  <h2>2. Скільки</h2>
+  <div class="row">
+    <label>повторів <input id="reps" type="number" min="1" max="200" value="20"></label>
+    <label>секунд на повтор <input id="gap" type="number" min="2" max="20" value="3"></label>
+  </div>
+  <div class="mute" style="margin-top:6px">Прошивка для датасету (<code>pio run -e dataset</code>) шле до 30 кліпів за хвилину, тож 3 с на повтор вистачає. Звичайна — до 10, тоді ставити 7 с. Чи почула плата, видно в таблиці із запізненням ~2 с.</div>
+</section>
+
+<div id="stage">
+  <div id="count">—</div>
+  <div id="what">Обери звук і натисни «Старт»</div>
+  <div id="info" class="mute"></div>
+</div>
+
+<div class="row" style="margin-top:12px">
+  <button class="big" id="start">Старт</button>
+  <button id="pause" disabled>Пауза</button>
+  <button id="stop" disabled>Стоп</button>
+  <button id="bad" disabled>Брак: останній повтор не вдався</button>
+</div>
+
+<section>
+  <h2>Повтори</h2>
+  <div class="tally mute" id="tally"></div>
+  <table><thead><tr><th>#</th><th>звук</th><th>плата почула?</th><th>пік</th></tr></thead><tbody id="log"></tbody></table>
+</section>
+
+<script>
+const CATS = [
+  ["хлопок", "pos"], ["два_хлопки", "pos"],
+  ["пальці", "neg"], ["стіл_долонею", "neg"], ["коліно", "neg"], ["ложка_чашка", "neg"],
+  ["стук_двері", "neg"], ["ковдра", "neg"], ["книга_на_ліжко", "neg"], ["мова", "neg"],
+  ["мова_в_ритмі", "neg"], ["кашель", "neg"], ["двері", "neg"],
+];
+const $ = s => document.querySelector(s);
+let label = "", running = false, paused = false, trial = 0, lastTrial = null, wakeLock = null;
+const counts = {};
+
+function drawCats() {
+  $("#cats").innerHTML = "";
+  for (const [name, kind] of CATS) {
+    const b = document.createElement("button");
+    b.className = `cat ${kind}` + (name === label ? " on" : "");
+    b.textContent = name.replaceAll("_", " ");
+    b.onclick = () => { if (!running) { label = name; drawCats(); show("—", `Готово: ${name.replaceAll("_", " ")}`, ""); } };
+    $("#cats").appendChild(b);
+  }
+}
+$("#addCustom").onclick = () => {
+  const v = $("#custom").value.trim().replace(/\s+/g, "_");
+  if (v && !CATS.some(c => c[0] === v)) CATS.push([v, "neg"]);
+  label = v || label; $("#custom").value = ""; drawCats();
+};
+
+function show(count, what, info, mode = "") {
+  $("#count").textContent = count; $("#what").textContent = what; $("#info").textContent = info;
+  $("#stage").className = mode;
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function waitWhilePaused() { while (paused && running) await sleep(200); }
+async function api(path) { return (await fetch(path)).json(); }
+
+async function runTrial(n, total) {
+  const name = label.replaceAll("_", " ");
+  const t0 = Date.now(), gap = Math.max(2, +$("#gap").value) * 1000;
+  // Плата слухає постійно, тож повтор починається вже на «1». Сервер прив'язує кліп до повтору за часом звуку
+  await waitWhilePaused(); if (!running) return;
+  await api(`/session?label=${encodeURIComponent(label)}&trial=${n}`);
+  for (const c of ["1", "2"]) {
+    show(c, name, `повтор ${n} з ${total}`); await sleep(300);
+  }
+  show("ЗАРАЗ", name, `повтор ${n} з ${total}`, "go");
+  if (navigator.vibrate) navigator.vibrate(80);
+  addRow(n, label);
+  lastTrial = { n, label };
+  await sleep(Math.max(600, gap - (Date.now() - t0)));
+}
+
+// Кліп приходить через ~2 с після звуку, тож таблицю оновлюємо окремо, не чекаючи в повторі
+const rows = {}; // "label:n" → рядок таблиці
+function addRow(n, l) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td>${n}</td><td>${l.replaceAll("_", " ")}</td><td class="mute">чекаю…</td><td></td>`;
+  rows[`${l}:${n}`] = { tr, l, n, since: Date.now() / 1000, got: null };
+  $("#log").prepend(tr);
+}
+let sinceAll = 0;
+async function refreshRows() {
+  const open = Object.values(rows).filter(r => r.got === null);
+  if (!open.length) return;
+  const clips = await api(`/session/clips?since=${Math.min(...open.map(r => r.since)) - 5}`);
+  const now = Date.now() / 1000;
+  for (const r of open) {
+    const got = clips.filter(c => c.session === r.l && c.trial === r.n);
+    if (!got.length && now - r.since < 5) continue; // ще може прийти
+    r.got = got;
+    const td = r.tr.querySelectorAll("td");
+    td[2].className = got.length ? "ok" : "miss";
+    td[2].textContent = got.length ? "так" + (got.length > 1 ? ` (${got.length} кліпи)` : "") : "ні";
+    td[3].textContent = got.map(c => c.peak).join(", ");
+    counts[r.l] = counts[r.l] || { ok: 0, miss: 0 };
+    counts[r.l][got.length ? "ok" : "miss"]++;
+  }
+  $("#tally").innerHTML = Object.entries(counts).map(([k, v]) => `<span><b>${k.replaceAll("_", " ")}</b>: почула ${v.ok}, ні ${v.miss}</span>`).join("");
+}
+setInterval(() => refreshRows().catch(() => {}), 700);
+
+$("#start").onclick = async () => {
+  if (!label) { show("—", "Спершу обери звук", ""); return; }
+  running = true; paused = false;
+  $("#start").disabled = true; $("#pause").disabled = false; $("#stop").disabled = false; $("#bad").disabled = false;
+  try { wakeLock = await navigator.wakeLock?.request("screen"); } catch (e) {}
+  const total = Math.max(1, +$("#reps").value);
+  const first = Object.values(rows).filter(r => r.l === label).length + 1;
+  for (let n = first; n < first + total && running; n++) await runTrial(n, first + total - 1);
+  await finish();
+};
+$("#pause").onclick = () => { paused = !paused; $("#pause").textContent = paused ? "Далі" : "Пауза"; if (paused) show("⏸", "Пауза", ""); };
+$("#stop").onclick = () => { running = false; };
+$("#bad").onclick = async () => {
+  if (!lastTrial) return;
+  await api(`/event?bad=${encodeURIComponent(lastTrial.label)}&trial=${lastTrial.n}`);
+  $("#log").firstElementChild?.querySelectorAll("td")[2].insertAdjacentHTML("beforeend", " · <b>брак</b>");
+};
+async function finish() {
+  running = false; paused = false;
+  await api("/session");
+  wakeLock?.release?.(); wakeLock = null;
+  $("#start").disabled = false; $("#pause").disabled = true; $("#stop").disabled = true; $("#pause").textContent = "Пауза";
+  show("✓", "Запис зупинено, світло знову працює", "");
+}
+window.addEventListener("pagehide", () => fetch("/session", { keepalive: true }));
+drawCats();
+</script>

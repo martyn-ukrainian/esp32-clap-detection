@@ -1,0 +1,36 @@
+# Секрети
+.env
+firmware/wifi.cmake
+
+# Дані: записи з кімнати (мова), датасети з чужими ліцензіями
+data/
+train/data/
+*.wav
+*.flac
+*.mp3
+*.ogg
+*.zip
+
+# Особисте
+CLAUDE.md
+.claude/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Прошивка: збірка і згенероване
+firmware/.pio/
+firmware/build/
+firmware/managed_components/
+firmware/dependencies.lock
+firmware/sdkconfig.esp32s3.old
+
+# Система й редактори
+.DS_Store
+.vscode/
+.idea/
+
+# Особисті нотатки
+private/

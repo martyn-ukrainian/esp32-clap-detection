@@ -1,0 +1,14 @@
+# На Pi: docker compose up -d --build.
+services:
+  clap-light:
+    build: .
+    container_name: clap-light
+    restart: unless-stopped
+    user: "1000:1000"  # файли в data/ належать користувачу, а не root
+    # Мережа хоста: лампи в LAN (TCP 6668, UDP 6667 для пошуку), порт 7076 одразу на Pi
+    network_mode: host
+    environment:
+      TZ: Europe/Kyiv  # час у лозі київський, а не UTC
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./data:/app/data
