@@ -9,7 +9,9 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_random.h"
 #include "esp_wifi.h"
+#include "lwip/sockets.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
@@ -32,6 +34,10 @@ static EventGroupHandle_t events;
 static QueueHandle_t queue;
 static QueueHandle_t commands; // шляхи GET, напр. "/toggle"; окремо від кліпів, щоб не чекали за ними
 static uint32_t dropped = 0;
+static int udp_sock = -1;
+static struct sockaddr_in udp_to;
+static uint32_t udp_boot; // випадкове на кожен старт: Pi відрізняє повтор від нового пакета після перезапуску
+static uint32_t udp_seq = 0;
 static int64_t sent_at[CLIP_MAX_PER_MIN]; // часи останніх кліпів, для ліміту за хвилину
 static int sent_idx = 0;
 
@@ -169,7 +175,13 @@ void net_init()
     ESP_ERROR_CHECK(esp_wifi_start());
     // Без енергозбереження: інакше плата прокидається раз на ~300 мс, пінг 2–3 с і кліпи по 64 КБ застрягають
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-    ESP_LOGI(TAG, "Wi-Fi: %s, Pi: %s", WIFI_SSID, PI_URL);
+    ESP_LOGI(TAG, "Wi-Fi: %s, Pi: %s, UDP %d", WIFI_SSID, PI_URL, PI_UDP_PORT);
+
+    udp_boot = esp_random();
+    udp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    udp_to.sin_family = AF_INET;
+    udp_to.sin_port = htons(PI_UDP_PORT);
+    inet_pton(AF_INET, PI_HOST, &udp_to.sin_addr);
 
     // Той самий пріоритет, що в app_main (1): мережа не відбиратиме час у мікрофона
     xTaskCreate(sender_task, "net_send", 6144, NULL, 1, NULL);
@@ -204,6 +216,15 @@ bool net_clip(const int16_t *pcm, int n, const char *label, int peak, int rms)
     sent_at[sent_idx] = now;
     sent_idx = (sent_idx + 1) % CLIP_MAX_PER_MIN;
     return true;
+}
+
+void net_udp(const char *kind, const char *params)
+{
+    if (udp_sock < 0 || !(xEventGroupGetBits(events) & CONNECTED_BIT)) return;
+    char msg[128];
+    int n = snprintf(msg, sizeof(msg), "%s %08lx %lu %s", kind, (unsigned long)udp_boot, (unsigned long)++udp_seq, params);
+    for (int k = 0; k < 2; k++) // Wi-Fi і так повторює кадр без ACK; другий пакет — від втрати в черзі
+        sendto(udp_sock, msg, n, 0, (struct sockaddr *)&udp_to, sizeof(udp_to));
 }
 
 bool net_command(const char *path)

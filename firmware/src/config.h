@@ -16,7 +16,9 @@
 #define LOG_RAW 0
 
 // Pi дім-хабу. IP, а не home-pi.local: ESP-IDF без компонента mDNS імен .local не знає. IP закріпити в роутері.
-#define PI_URL "http://192.168.0.105:7076"
+#define PI_HOST "192.168.0.105"
+#define PI_URL "http://" PI_HOST ":7076"
+#define PI_UDP_PORT 7077 // toggle і рішення моделі: UDP, без з'єднання й черги (server/main.py, BoardUdp)
 
 // 1 = прошивка для збору датасету (pio run -e dataset): /toggle не шле, кліпи довші й частіші. Див. нижче.
 #ifndef DATASET

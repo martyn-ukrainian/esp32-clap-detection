@@ -6,6 +6,7 @@
   uv run fastapi dev server/main.py --port 7076     локально
   docker compose up -d --build                      на Pi
 """
+import asyncio
 import re
 import sys
 import threading
@@ -29,6 +30,8 @@ lamps = [Lamp(name, l["id"], l["key"], l["ip"]) for name, l in lamps_from_env().
 session = {"label": "", "trial": 0}  # запис датасету: що зараз робить людина і який це повтор
 lights = {"enabled": True}  # False — /toggle від плати лише пишеться в лог, лампи не чіпає
 clips_log = []  # останні кліпи для сторінки /record: чи почула плата повтор
+UDP_PORT = 7077  # = PI_UDP_PORT у прошивці
+udp_seen = []  # останні (boot, seq) з UDP, щоб повтор не перемкнув удруге
 events_log = []  # рішення моделі на платі: /event?p=…&at=…&sent=…
 net_best = [float("inf")]  # найменше (прийшла − sent) за весь час: «мережа без черги»
 session_log = []  # (час, label, trial) кожної зміни сесії: кліп приходить ~2 с після звуку, повтор шукаємо за часом звуку
@@ -36,6 +39,10 @@ session_log = []  # (час, label, trial) кожної зміни сесії: �
 
 def log_event(request: Request, kind: str, extra: dict | None = None):
     # Один рядок на запит: час, звідки, що, параметри як key=value
+    log_line(request.client.host, kind, {**request.query_params, **(extra or {})})
+
+
+def log_line(source: str, kind: str, params: dict):
     now = datetime.now()
     DATA.mkdir(exist_ok=True)
     path = DATA / f"{now:%Y-%m-%d}.csv"
@@ -43,9 +50,8 @@ def log_event(request: Request, kind: str, extra: dict | None = None):
     with path.open("a") as f:
         if new:
             f.write("time,source,kind,params\n")
-        params = {**request.query_params, **(extra or {})}
         details = " ".join(f"{k}={v}" for k, v in params.items())
-        f.write(f"{now:%H:%M:%S.%f}"[:-3] + f",{request.client.host},{kind},{details}\n")
+        f.write(f"{now:%H:%M:%S.%f}"[:-3] + f",{source},{kind},{details}\n")
 
 
 def power_states() -> dict:
@@ -79,6 +85,10 @@ def status(request: Request) -> dict:
 def toggle(request: Request) -> dict:
     """Хоч одна світить → вимкнути всі, інакше ввімкнути всі на максимум. Це шле плата на подвійний хлопок."""
     log_event(request, "toggle")
+    return do_toggle()
+
+
+def do_toggle() -> dict:
     if session["label"]:
         return {"skipped": f"іде запис «{session['label']}», світло не чіпаю"}
     if not lights["enabled"]:
@@ -123,7 +133,11 @@ def event(request: Request) -> dict:
     if not request.query_params:
         raise HTTPException(400, "порожня подія")
     log_event(request, "event")
-    q = request.query_params
+    record_event(request.query_params)
+    return {"ok": True}
+
+
+def record_event(q) -> None:
     if q.get("boot") == "1":
         net_best[0] = float("inf")  # плата перезапустилась: її годинник знову з нуля
     if "at" in q and "sent" in q:
@@ -133,9 +147,36 @@ def event(request: Request) -> dict:
         offset = now * 1000 - int(q["sent"])
         net_best[0] = min(net_best[0], offset)
         events_log.append({"at": now, "p": float(q.get("p", 1)), "pair": q.get("pair") == "1",
-                           "board_ms": int(q["sent"]) - int(q["at"]), "net_ms": round(offset - net_best[0])})
+                           "board_ms": int(q["sent"]) - int(q["at"]), "net_ms": round(offset - net_best[0]),
+                           "via": q.get("via", "http")})
         del events_log[:-200]
-    return {"ok": True}
+
+
+class BoardUdp(asyncio.DatagramProtocol):
+    """UDP від плати (порт UDP_PORT): без з'єднання й черги, тож команда не чекає за кліпами й повільним Wi-Fi.
+
+    Датаграма — один рядок: «toggle <boot> <seq>» або «event <boot> <seq> p=0.93 at=… sent=…» («pair=1» для пари).
+    Плата шле кожну двічі; повтор з тим самим (boot, seq) відкидаємо.
+    """
+
+    def datagram_received(self, data, addr):
+        parts = data.decode(errors="replace").split()
+        if len(parts) < 3 or (parts[1], parts[2]) in udp_seen:
+            return
+        udp_seen.append((parts[1], parts[2]))
+        del udp_seen[:-50]
+        kind, params = parts[0], dict(p.split("=", 1) for p in parts[3:] if "=" in p)
+        log_line(addr[0], f"udp_{kind}", {"seq": parts[2], **params})
+        if kind == "toggle":
+            # Лампи — мережеві виклики: не в циклі подій, щоб не гальмувати решту
+            asyncio.get_running_loop().run_in_executor(None, do_toggle)
+        elif kind == "event":
+            record_event({**params, "via": "udp"})
+
+
+@app.on_event("startup")
+async def start_udp():
+    await asyncio.get_running_loop().create_datagram_endpoint(BoardUdp, local_addr=("0.0.0.0", UDP_PORT))
 
 
 @app.get("/session/events")

@@ -89,23 +89,24 @@ extern "C" void app_main()
         if (now_ms >= CLAP_IGNORE_MS && clap_model_window(&model, lv, now_ms, &ring, &p)) {
             bool is_clap = p >= 0.5f;
             ESP_LOGI(TAG, "удар: модель %.2f → %s", p, is_clap ? "ХЛОПОК" : "ні");
-            // at — коли був звук (uptime, мс); плата допише sent, щоб Pi порахував затримку
-            char path[NET_PATH_LEN];
-            snprintf(path, sizeof(path), "/event?p=%.2f&at=%lu", p,
-                     (unsigned long)(esp_timer_get_time() / 1000 - CLAP_VIEW_POST_MS));
-            net_command(path);
+            // at — коли був звук, sent — коли пішло (uptime, мс): Pi рахує, скільки чекало на платі й у Wi-Fi
+            unsigned long t = esp_timer_get_time() / 1000;
+            char params[64];
+            snprintf(params, sizeof(params), "p=%.2f at=%lu sent=%lu", p, t - CLAP_VIEW_POST_MS, t);
+            net_udp("event", params);
             if (is_clap) intent_on_clap(&intent, now_ms - CLAP_VIEW_POST_MS);
         }
         if (intent_tick(&intent, now_ms) == INTENT_TOGGLE) {
-            char path[NET_PATH_LEN];
-            snprintf(path, sizeof(path), "/event?pair=1&at=%lu", (unsigned long)(esp_timer_get_time() / 1000));
-            net_command(path);
 #if DATASET
             ESP_LOGI(TAG, "ДВА ХЛОПКИ (датасет: світло не чіпаю)");
 #else
             ESP_LOGI(TAG, "ДВА ХЛОПКИ → перемкнути");
-            if (!net_command("/toggle")) ESP_LOGW(TAG, "черга команд повна");
+            net_udp("toggle", ""); // першим: світло важливіше за звіт
 #endif
+            unsigned long t = esp_timer_get_time() / 1000;
+            char params[64];
+            snprintf(params, sizeof(params), "pair=1 at=%lu sent=%lu", t, t);
+            net_udp("event", params);
         }
 #if CLIP_UPLOAD
         track_event(&ev, lv, &ring, now_ms);

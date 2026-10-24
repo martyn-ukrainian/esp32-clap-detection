@@ -11,4 +11,7 @@ bool net_clip(const int16_t *pcm, int n, const char *label, int peak, int rms);
 // GET на Pi без тіла, напр. "/toggle". Не блокує. false = черга команд повна.
 #define NET_PATH_LEN 64
 bool net_command(const char *path);
+// UDP на Pi: «<kind> <boot> <seq> <params>», двічі підряд (Pi відкидає повтор). Не блокує, не чекає відповіді.
+// Для команд, яким важлива швидкість: toggle, рішення моделі.
+void net_udp(const char *kind, const char *params);
 uint32_t net_clips_dropped();
