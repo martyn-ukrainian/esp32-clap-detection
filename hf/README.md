@@ -11,7 +11,7 @@ pipeline_tag: audio-classification
 
 # esp32-clap-detection: a 100-byte clap detector for ESP32
 
-> Draft model card. Numbers are from 24.10.2026 and will change as more negatives are recorded.
+> Version 1.4 (24.10.2026), trained on 174 clips from the device. The cross-validation numbers below come from recorded clips; a live on-device test is in progress. Numbers will change as more negatives are recorded.
 
 Two claps toggle the light. An ESP32-S3 with an INMP441 I²S microphone listens on its own: no cloud, no wake-word engine, no neural network. This repo holds the model that decides "was that a clap?".
 
@@ -20,21 +20,21 @@ The model is a logistic regression over 8 hand-made features of the sound around
 ## How it works
 
 1. The board keeps the last second of audio (16 kHz, 16-bit) in a ring buffer.
-2. When a 10 ms window jumps over a peak threshold, the board waits 250 ms and takes **0.3 s before the onset + 0.25 s after** (0.55 s).
+2. When a 10 ms window jumps over a peak threshold, the board waits 150 ms and takes **0.3 s before the onset + 0.15 s after** (0.45 s).
 3. It computes a short-time spectrum (256-point FFT, Hann window, 10 ms hop) and 8 features at the strongest onset.
 4. Features are standardized (`(x − mean) / scale`) and fed to `sigmoid(w · z + b)`. `p ≥ 0.5` means clap.
 5. A separate rule turns claps into intent: **two claps 150–700 ms apart** toggle the light; three or more (applause) do nothing.
 
 | Feature | What it measures | Weight* |
 |---|---|---|
-| `flux` | suddenness: how much the spectrum grew in 10 ms (log) | +0.51 |
-| `band_1_4k` | brightness: share of energy in 1–4 kHz in the 30 ms around the onset | +0.99 |
-| `low_300` | dullness: share of energy below 300 Hz in the same 30 ms | −1.04 |
-| `width` | share of 500 Hz bands that grew by 6+ dB at the onset | −1.01 |
-| `decay` | energy 100–150 ms after the onset relative to the onset (log) | −0.85 |
-| `rise` | onset energy relative to 20 ms before (log) | +0.64 |
-| `overload` | largest jump between neighbouring samples (mic overload) | +0.76 |
-| `level` | onset energy over the background before it (log) | −0.12 |
+| `flux` | suddenness: how much the spectrum grew in 10 ms (log) | +0.40 |
+| `band_1_4k` | brightness: share of energy in 1–4 kHz in the 30 ms around the onset | +1.08 |
+| `low_300` | dullness: share of energy below 300 Hz in the same 30 ms | −0.84 |
+| `width` | share of 500 Hz bands that grew by 6+ dB at the onset | −0.79 |
+| `decay` | energy 100–150 ms after the onset relative to the onset (log) | −0.92 |
+| `rise` | onset energy relative to 20 ms before (log) | −0.06 |
+| `overload` | largest jump between neighbouring samples (mic overload) | +0.72 |
+| `level` | onset energy over the background before it (log) | +0.06 |
 
 \* on standardized features; `+` pushes towards "clap". In plain words: a clap is sudden, bright (1–4 kHz), not boomy, and dies out fast. A thump on the bed is boomy; speech is not sudden and does not die out.
 
@@ -80,7 +80,7 @@ import json, numpy as np
 from clap_features import features, read_wav   # tools/clap_features.py in the GitHub repo
 
 m = json.load(open("clap_model.json"))
-x, rate = read_wav("clip.wav")                 # 16 kHz mono int16, onset at 0.3 s, 0.55 s long
+x, rate = read_wav("clip.wav")                 # 16 kHz mono int16, onset at 0.3 s, 0.45 s long
 v = features(x, rate)
 z = (np.array([v[k] for k in m["features"]]) - m["mean"]) / m["scale"]
 p = 1 / (1 + np.exp(-(z @ m["weights"] + m["bias"])))
