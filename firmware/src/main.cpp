@@ -10,6 +10,7 @@
 #include "ring.h"
 
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 #include "esp_timer.h"
 
 #include <stdio.h>
@@ -68,6 +69,13 @@ extern "C" void app_main()
     ESP_LOGI(TAG, "модель хлопка %s", CLAP_MODEL_VERSION);
     net_init();
 
+    // Watchdog на цей цикл: не кликнув esp_task_wdt_reset за LOOP_WDT_MS — паніка й перезапуск
+    esp_task_wdt_config_t wdt = {};
+    wdt.timeout_ms = LOOP_WDT_MS;
+    wdt.trigger_panic = true;
+    if (esp_task_wdt_reconfigure(&wdt) == ESP_ERR_INVALID_STATE) esp_task_wdt_init(&wdt);
+    esp_task_wdt_add(NULL);
+
     static int32_t raw[WINDOW_SAMPLES];
     static int16_t pcm[WINDOW_SAMPLES];
     level_state_t st = {};
@@ -80,6 +88,7 @@ extern "C" void app_main()
     level_t loudest = {};
     int windows = 0;
     while (true) {
+        esp_task_wdt_reset();
         int n = mic_read(raw, WINDOW_SAMPLES);
         level_t lv = level_window(raw, n, &st, pcm);
         ring_write(&ring, pcm, n);

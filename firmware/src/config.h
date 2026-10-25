@@ -20,6 +20,11 @@
 #define PI_URL "http://" PI_HOST ":7076"
 #define PI_UDP_PORT 7077 // toggle і рішення моделі: UDP, без з'єднання й черги (server/main.py, BoardUdp)
 
+// Щоб плата не мовчала до ранку (завмерла 25.10 о 01:01 і стояла 12 год)
+#define ALIVE_EVERY_MS 30000          // пульс на Pi: час роботи, пам'ять, Wi-Fi, причина останнього старту
+#define WIFI_LOST_RESTART_MS 300000   // 5 хв без Wi-Fi — перезапуск
+#define LOOP_WDT_MS 10000             // цикл мікрофона застряг на 10 с — перезапуск (watchdog)
+
 // 1 = прошивка для збору датасету (pio run -e dataset): /toggle не шле, кліпи довші й частіші. Див. нижче.
 #ifndef DATASET
 #define DATASET 0

@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_random.h"
+#include "esp_system.h"
 #include "esp_wifi.h"
 #include "lwip/sockets.h"
 #include "freertos/FreeRTOS.h"
@@ -143,6 +144,34 @@ static void command_task(void *arg)
     }
 }
 
+// Пульс раз на ALIVE_EVERY_MS і перезапуск, якщо Wi-Fi нема WIFI_LOST_RESTART_MS.
+// Якщо плата знову замовкне, за останніми пульсами на Pi видно чому: пам'ять тече, Wi-Fi слабне чи обрив раптом.
+static void alive_task(void *arg)
+{
+    int64_t lost_since = esp_timer_get_time();
+    int rst = esp_reset_reason(); // 1 живлення, 3 esp_restart, 4 паніка, 6 task watchdog, 9 brownout
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(ALIVE_EVERY_MS));
+        int64_t now = esp_timer_get_time();
+        if (!(xEventGroupGetBits(events) & CONNECTED_BIT)) {
+            ESP_LOGW(TAG, "Wi-Fi нема %lld с", (now - lost_since) / 1000000);
+            if (now - lost_since >= WIFI_LOST_RESTART_MS * 1000LL) {
+                ESP_LOGE(TAG, "Wi-Fi нема %d хв, перезапуск", WIFI_LOST_RESTART_MS / 60000);
+                esp_restart();
+            }
+            continue;
+        }
+        lost_since = now;
+        wifi_ap_record_t ap = {};
+        esp_wifi_sta_get_ap_info(&ap);
+        char params[112];
+        snprintf(params, sizeof(params), "up=%lld heap=%lu psram=%lu rssi=%d dropped=%lu rst=%d", now / 1000000,
+                 (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), ap.rssi, (unsigned long)dropped, rst);
+        net_udp("alive", params);
+    }
+}
+
 void net_init()
 {
     esp_err_t err = nvs_flash_init(); // Wi-Fi тримає калібрування в NVS
@@ -186,6 +215,7 @@ void net_init()
     // Той самий пріоритет, що в app_main (1): мережа не відбиратиме час у мікрофона
     xTaskCreate(sender_task, "net_send", 6144, NULL, 1, NULL);
     xTaskCreate(command_task, "net_cmd", 6144, NULL, 1, NULL);
+    xTaskCreate(alive_task, "net_alive", 4096, NULL, 1, NULL);
 }
 
 bool net_clip(const int16_t *pcm, int n, const char *label, int peak, int rms)
